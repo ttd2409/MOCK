@@ -80,6 +80,8 @@ void convertEntryToDirectory(Directory *directory, uint8_t *buff, uint32_t index
     directory->fileSize = convertLittleToBig32((buff[index + ENTRY_FILESIZE_OFFSET] << 24) | (buff[index + ENTRY_FILESIZE_OFFSET + 1] << 16) | 
                     (buff[index + ENTRY_FILESIZE_OFFSET + 2] << 8) | buff[index + ENTRY_FILESIZE_OFFSET + 3]);
 }
+
+
 void readDirectory(Directory *directory, FILE *file, uint8_t *buff)
 {
     uint32_t readMultiByte = HALReadMultilSector(RootDirStartSector, RootDirSector, buff, file);
