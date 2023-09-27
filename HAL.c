@@ -14,15 +14,7 @@
 /*******************************************************************************
  * API
  ******************************************************************************/
-uint16_t convertLittleToBig16(uint16_t value)
-{
-    return (value >> 8) | (value << 8);
-}
 
-uint32_t convertLittleToBig32(uint32_t value)
-{
-    return ((value >> 24) & 0xFF) | ((value >> 8) & 0xFF00) | ((value << 8) & 0xFF0000) | ((value << 24) & 0xFF000000);
-}
 uint32_t HALReadSector(uint32_t index, uint8_t *buff, FILE *fp)
 {
     uint32_t byteRead;
@@ -53,12 +45,12 @@ void readBootSector(Boot *boot, FILE *fp, uint8_t *buff)
     }
     else
     {
-        boot->bytePerSector = convertLittleToBig16((buff[11] << 8) | buff[12]);
+        boot->bytePerSector = CONVERT_2_BYTES(&buff[11]);
         boot->sectorsPerCluster = buff[13];
         boot->numberReservedSectors = buff[14];
         boot->FATTableNumber = buff[16];
-        boot->rootEntryCount = convertLittleToBig16((buff[17] << 8) | buff[18]);
-        boot->totalSector = convertLittleToBig16((buff[19] << 8) | buff[20]);
+        boot->rootEntryCount = CONVERT_2_BYTES(&buff[17]);
+        boot->totalSector = CONVERT_2_BYTES(&buff[19]);
         boot->sectorPerFAT = buff[22];
     }
 }

@@ -31,6 +31,8 @@
 #define DATA_SIZE 512 * 2847
 #define MAX_BYTE 512 * 2879
 #define SIZE_ENTRY    32U
+#define CONVERT_2_BYTES(X) (((*((X) + 1)) << 8)|(*(X)))
+#define CONVERT_4_BYTES(X) (((*((X) + 3))<<24)|((*((X) + 2)) << 16)|((*((X) + 1)) << 8)|(*(X)))
 
 
 typedef struct BOOT_SECTER
@@ -50,8 +52,6 @@ typedef struct FAT
 
 } FAT;
 
-uint32_t convertLittleToBig32(uint32_t value);
-uint16_t convertLittleToBig16(uint16_t value);
 uint32_t HALReadSector(uint32_t index, uint8_t *buff, FILE *file);
 uint32_t HALReadMultilSector(uint32_t index, uint32_t num, uint8_t *buff, FILE *file);
 void readBootSector(Boot * boot, FILE* fp, uint8_t* buff);

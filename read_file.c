@@ -31,20 +31,19 @@ static Time convertTime(uint16_t data)
     result.hour = (data >> 11) & 0x1F;
     return result;
 }
-void printDirectory(Directory *directory, bool isFolder)
+void printDirectory(Directory *directory, bool isFolder, uint8_t index)
 {
-    static uint8_t index = 1;
     Date date = convertDate(directory->date);
     Time time = convertTime(directory->time);
     if (isFolder)
     {
-        printf("%d: %s%s\t\t\t", index++, directory->nameOfFile, directory->extension);
-        printf("%02d/%02d/%04d\t%02d:%02d:%02d\n", date.day, date.month, date.year, time.hour, time.minute, time.second);
+        printf("%d: %s%s\t\t\t", index, directory->nameOfFile, directory->extension);
+        printf("%02d/%02d/%04d\t%02d:%02d:%02d\t%x\n", date.day, date.month, date.year, time.hour, time.minute, time.second, directory->clusterNumber);
     }
     else
     {
-        printf("%d: %s.%s\t\t%d\t", index++, directory->nameOfFile, directory->extension, directory->fileSize);
-        printf("%02d/%02d/%04d\t%02d:%02d:%02d\n", date.day, date.month, date.year, time.hour, time.minute, time.second);
+        printf("%d: %s.%s\t\t%d\t", index, directory->nameOfFile, directory->extension, directory->fileSize);
+        printf("%02d/%02d/%04d\t%02d:%02d:%02d\t%x\n", date.day, date.month, date.year, time.hour, time.minute, time.second, directory->clusterNumber);
     }
 }
 
@@ -74,40 +73,59 @@ void convertEntryToDirectory(Directory *directory, uint8_t *buff, uint32_t index
 {
     readFileName(&buff[index], directory->nameOfFile);
     readExtension(&buff[index], directory->extension);
-    directory->time = convertLittleToBig16((buff[index + ENTRY_TIME_OFFSET] << 8) | buff[index + ENTRY_TIME_OFFSET + 1]);
-    directory->date = convertLittleToBig16((buff[index + ENTRY_DATE_OFFSET] << 8) | buff[index + ENTRY_DATE_OFFSET + 1]);
-    directory->clusterNumber = convertLittleToBig16((buff[index + ENTRY_CLUSTER_OFFSET] << 8) | buff[index + ENTRY_CLUSTER_OFFSET + 1]);
-    directory->fileSize = convertLittleToBig32((buff[index + ENTRY_FILESIZE_OFFSET] << 24) | (buff[index + ENTRY_FILESIZE_OFFSET + 1] << 16) | 
-                    (buff[index + ENTRY_FILESIZE_OFFSET + 2] << 8) | buff[index + ENTRY_FILESIZE_OFFSET + 3]);
+    directory->time = CONVERT_2_BYTES(&buff[index + ENTRY_TIME_OFFSET]);
+    directory->date = CONVERT_2_BYTES(&buff[index + ENTRY_DATE_OFFSET]);
+    directory->clusterNumber = CONVERT_2_BYTES(&buff[index + ENTRY_CLUSTER_OFFSET]);
+    directory->fileSize = CONVERT_4_BYTES(&buff[index + ENTRY_FILESIZE_OFFSET]);
 }
-void readDirectory(Directory *directory, FILE *file, uint8_t *buff)
+
+void readDirectory(Directory *directory, FILE *file, uint8_t *buff, uint32_t *cluster,uint32_t * attribute)
 {
     uint32_t readMultiByte = HALReadMultilSector(RootDirStartSector, RootDirSector, buff, file);
-    uint32_t maxEntries = readMultiByte / SIZE_ENTRY;
+    uint32_t maxEntries = readMultiByte / SIZE_ENTRY; // 14
+    directory->clusterIndex = 0;
+    uint8_t index = 1;
     for (uint32_t j = 0; j < maxEntries; j++)
     {
-        uint32_t index = j * SIZE_ENTRY;
-        if (buff[index] != 0)
+        uint32_t entryIndex = j * SIZE_ENTRY;
+        if (buff[entryIndex] == 0)
         {
-            convertEntryToDirectory(directory, buff, index);
-            if (buff[index + 11] == 0x10) // folder
+            return;
+        }
+        else if (buff[entryIndex+11] != 0x0F)
+        {
+            convertEntryToDirectory(directory, buff, entryIndex);
+            directory->clusterIndex++;
+            cluster[directory->clusterIndex] = directory->clusterNumber;
+            attribute[directory->clusterIndex] = buff[entryIndex + 11];
+
+            if (buff[entryIndex + 11] == 0x10) // folder
             {
-                printDirectory(directory, true);
+                printDirectory(directory, true, index);
             }
-            else if (buff[index + 11] == 0) // file
+            else if (buff[entryIndex + 11] == 0) // file
             {
-                printDirectory(directory, false);
+                printDirectory(directory, false,index);
             }
+            index++;
         }
     }
 }
+void readSubDirectory(Directory * directory, uint32_t *cluster)
+{
+    // uint32_t offsetDATA = (DATA_START_SECTOR + cluster - 2 )* 512;
+}
 void readFAT(uint8_t *buff, FILE *file)
 {
+    
 }
-void readData(uint8_t *buff, FILE *file)
+void readData(Data *data, uint8_t *buff, FILE *file, uint32_t cluster)
 {
-    uint32_t readMultiSector = HALReadMultilSector(33, 1, buff, file);
-    for (int i = 0; i < readMultiSector; ++i)
+    uint32_t dataStartSector = RootDirStartSector + RootDirSector; // 33
+    uint32_t dataSector = TOTAL_SECTOR - dataStartSector;    // 2847
+    uint32_t offsetData = DATA_START_SECTOR + cluster - 2; //33 
+    uint32_t readSector = HALReadSector(offsetData, buff, file);
+    for (int i = 0; i < readSector; ++i)
     {
         printf("%c", buff[i]);
     }
