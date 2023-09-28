@@ -25,36 +25,23 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+#define FILE_NAME "floppy.img"
+#define FILE_MODE "rb"
 #define SECTOR_SIZE 512U
 #define FAT_SIZE 512 * 9
 #define ROOT_SIZE 512 * 14
 #define DATA_SIZE 512 * 2847
 #define MAX_BYTE 512 * 2879
 #define SIZE_ENTRY    32U
-#define CONVERT_2_BYTES(X) (((*((X) + 1)) << 8)|(*(X)))
-#define CONVERT_4_BYTES(X) (((*((X) + 3))<<24)|((*((X) + 2)) << 16)|((*((X) + 1)) << 8)|(*(X)))
+#define CONVERT_2_BYTES(x) (((*((x) + 1)) << 8)|(*(x)))
+#define CONVERT_4_BYTES(x) (((*((x) + 3))<<24)|((*((x) + 2)) << 16)|((*((x) + 1)) << 8)|(*(x)))
 
-
-typedef struct BOOT_SECTER
+typedef enum
 {
-    uint16_t bytePerSector;
-    uint16_t totalSector;
-    uint16_t sectorPerFAT;
-    uint16_t rootEntryCount;
-    uint8_t sectorsPerCluster;
-    uint8_t numberReservedSectors;
-    uint8_t FATTableNumber;
-} Boot;
-typedef struct FAT
-{
-    uint8_t fatStartSector;
-    uint8_t fatSector;
+    ERROR_OPEN,
 
-} FAT;
+}ERRO_FILE;
 
-uint32_t HALReadSector(uint32_t index, uint8_t *buff, FILE *file);
-uint32_t HALReadMultilSector(uint32_t index, uint32_t num, uint8_t *buff, FILE *file);
-void readBootSector(Boot * boot, FILE* fp, uint8_t* buff);
-
-#endif /*_HAL_H_*/
-
+uint32_t HALReadSector(uint32_t index, uint8_t *buff);
+uint32_t HALReadMultilSector(uint32_t index, uint32_t num, uint8_t *buff);
+#endif 

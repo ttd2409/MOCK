@@ -3,8 +3,19 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+
+#define FILE_NAME "floppy.img"
+#define FILE_MODE "rb"
+#define SECTOR_SIZE 512U
+#define FAT_SIZE (512 * 9)
+#define ROOT_SIZE (512 * 14)
+#define DATA_SIZE (512 * 2847)
+#define MAX_BYTE (512 * 2879)
+#define SIZE_ENTRY 32U
+#define CONVERT_2_BYTES(x) (((*((x) + 1)) << 8) | (*(x)))
+#define CONVERT_4_BYTES(x) (((*((x) + 3)) << 24) | ((*((x) + 2)) << 16) | ((*((x) + 1)) << 8) | (*(x)))
 #define TOTAL_SECTOR 2880
-#define RootDirStartSector  19
+#define RootDirStartSector 19
 #define RootDirSector 14
 #define DATA_START_SECTOR 33
 #define SPACE_CHARACTER 0x20
@@ -12,45 +23,43 @@
 #define ENTRY_EXTENSION_LENGTH 3
 #define ENTRY_SIZE 32
 #define ATTRIBUTE_DIRECTORY 0x10
+#define ENTRY_ATTRIBUTES_OFFSET 0x11
 #define ENTRY_TIME_OFFSET 22
 #define ENTRY_DATE_OFFSET 24
 #define ENTRY_CLUSTER_OFFSET 26
 #define ENTRY_FILESIZE_OFFSET 28
-typedef struct 
+
+typedef struct
 {
-    uint8_t nameOfFile[8];
+    uint8_t nameOfFile[9];
     uint16_t time;
     uint16_t date;
     uint16_t clusterNumber;
-    uint8_t extension[3];
+    uint8_t extension[4];
     uint8_t attribute;
     uint32_t fileSize;
+    uint32_t clusterIndex;
 } Directory;
-typedef struct 
+
+typedef struct
 {
     uint16_t year;
     uint8_t day;
     uint8_t month;
-} Date;
-typedef struct 
-{
     uint8_t hour;
     uint8_t minute;
     uint8_t second;
-} Time;
-typedef struct 
+} DateTime;
+
+typedef struct
 {
-   uint16_t DataStartSector;
-   uint16_t DataSector;
-   uint32_t Cluster;
+    uint16_t DataStartSector;
+    uint16_t DataSector;
+    uint32_t Cluster;
+    uint32_t offSetData;
 } Data;
-#define SECTOR_SIZE 512U
-#define FAT_SIZE 512 * 9
-#define ROOT_SIZE 512 * 14
-#define DATA_SIZE 512 * 2847
-#define MAX_BYTE 512 * 2879
-#define SIZE_ENTRY    32U
-typedef struct BOOT_SECTER
+
+typedef struct
 {
     uint16_t bytePerSector;
     uint16_t totalSector;
@@ -60,174 +69,250 @@ typedef struct BOOT_SECTER
     uint8_t numberReservedSectors;
     uint8_t FATTableNumber;
 } Boot;
-typedef struct FAT
+
+typedef struct
 {
     uint8_t fatStartSector;
     uint8_t fatSector;
 } FAT;
-uint16_t convertLittleToBig16(uint16_t value)
+
+uint32_t HALReadSector(uint32_t index, uint8_t *buff)
 {
-    return (value >> 8) | (value << 8);
-}
-uint32_t convertLittleToBig32(uint32_t value)
-{
-    return ((value >> 24) & 0xFF) | ((value >> 8) & 0xFF00) | ((value << 8) & 0xFF0000) | ((value << 24) & 0xFF000000);
-}
-uint32_t HALReadSector(uint32_t index, uint8_t *buff, FILE *fp)
-{
-    uint32_t byteRead;
-    fseek(fp, index * SECTOR_SIZE, SEEK_SET);
-    byteRead = fread(buff, sizeof(uint8_t), SECTOR_SIZE, fp);
+    static FILE *file = NULL;
+    if (file == NULL)
+    {
+        file = fopen(FILE_NAME, FILE_MODE);
+        if (file == NULL)
+        {
+            printf("Cannot open file\n");
+            return -1;
+        }
+    }
+    fseek(file, index * SECTOR_SIZE, SEEK_SET);
+    uint32_t byteRead = fread(buff, sizeof(uint8_t), SECTOR_SIZE, file);
     return byteRead;
 }
-uint32_t HALReadMultilSector(uint32_t index, uint32_t num, uint8_t *buff, FILE *fp)
+
+uint32_t HALReadMultilSector(uint32_t index, uint32_t num, uint8_t *buff)
 {
+    static FILE *file = NULL;
+    if (file == NULL)
+    {
+        file = fopen(FILE_NAME, FILE_MODE);
+        if (file == NULL)
+        {
+            printf("Cannot open file\n");
+            return -1;
+        }
+    }
     uint32_t sectorAddress = index * SECTOR_SIZE;
+    fseek(file, sectorAddress, SEEK_SET);
     uint32_t byteRead = 0;
-    fseek(fp, sectorAddress, SEEK_SET); // Di chuyển con trỏ tới địa chỉ của sector cần đọc
     for (uint32_t i = 0; i < num; i++)
     {
-        uint32_t sectorRead = fread(buff + (i * SECTOR_SIZE), sizeof(uint8_t), SECTOR_SIZE, fp);
+        uint32_t sectorRead = fread(buff + (i * SECTOR_SIZE), sizeof(uint8_t), SECTOR_SIZE, file);
         byteRead += sectorRead;
     }
     return byteRead;
 }
-void readBootSector(Boot *boot, FILE *fp, uint8_t *buff)
+
+static DateTime convertDateTime(uint16_t date, uint16_t time)
 {
-    int byteCount = HALReadSector(0, buff, fp);
+    DateTime result;
+    result.day = date & 0x1F;
+    result.month = (date >> 5) & 0x0F;
+    result.year = ((date >> 9) & 0x7F) + 1980;
+    result.second = (time & 0x1F) * 2;
+    result.minute = (time >> 5) & 0x3F;
+    result.hour = (time >> 11) & 0x1F;
+    return result;
+}
+
+void convertEntryToDirectory(Directory *directory, uint8_t *buff, uint32_t index)
+{
+    memcpy(directory->nameOfFile, &buff[index], ENTRY_NAME_LENGTH);
+    directory->nameOfFile[ENTRY_NAME_LENGTH] = '\0';
+    memcpy(directory->extension, &buff[index + ENTRY_NAME_LENGTH + 1], ENTRY_EXTENSION_LENGTH);
+    directory->extension[ENTRY_EXTENSION_LENGTH] = '\0';
+    directory->time = CONVERT_2_BYTES(&buff[index + ENTRY_TIME_OFFSET]);
+    directory->date = CONVERT_2_BYTES(&buff[index + ENTRY_DATE_OFFSET]);
+    directory->clusterNumber = CONVERT_2_BYTES(&buff[index + ENTRY_CLUSTER_OFFSET]);
+    directory->fileSize = CONVERT_4_BYTES(&buff[index + ENTRY_FILESIZE_OFFSET]);
+}
+
+void printDirectory(Directory *directory, uint8_t index)
+{
+    DateTime result = convertDateTime(directory->date, directory->time);
+    printf("%-2d: %-8s %-4s %10d ", index, directory->nameOfFile, directory->extension, directory->fileSize);
+    printf("\t%02d/%02d/%04d\t%02d:%02d:%02d %x\n", result.day, result.month, result.year, result.hour, result.minute, result.second, directory->clusterNumber);
+}
+
+void readBootSector(Boot *boot, uint8_t *buff)
+{
+    int byteCount = HALReadSector(0, buff);
     if (buff[510] != 0x55 || buff[511] != 0xAA)
     {
         printf("Invalid Boot Sector\n");
     }
     else
     {
-        boot->bytePerSector = convertLittleToBig16((buff[11] << 8) | buff[12]);
+        boot->bytePerSector = CONVERT_2_BYTES(&buff[11]);
         boot->sectorsPerCluster = buff[13];
         boot->numberReservedSectors = buff[14];
         boot->FATTableNumber = buff[16];
-        boot->rootEntryCount = convertLittleToBig16((buff[17] << 8) | buff[18]);
-        boot->totalSector = convertLittleToBig16((buff[19] << 8) | buff[20]);
+        boot->rootEntryCount = CONVERT_2_BYTES(&buff[17]);
+        boot->totalSector = CONVERT_2_BYTES(&buff[19]);
         boot->sectorPerFAT = buff[22];
     }
 }
-static Date convertDate(uint16_t data)
+
+void readFAT(uint8_t *buff, uint32_t *fat)
 {
-    Date result;
-    result.day = data & 0x1F;
-    result.month = (data >> 5) & 0x0F;
-    result.year = ((data >> 9) & 0x7F) + 1980;
-    return result;
-}
-static Time convertTime(uint16_t data)
-{
-    Time result;
-    result.second = (data & 0x1F) * 2;
-    result.minute = (data >> 5) & 0x3F;
-    result.hour = (data >> 11) & 0x1F;
-    return result;
-}
-void printDirectory(Directory *directory, bool isFolder)
-{
-    static uint8_t index = 1;
-    Date date = convertDate(directory->date);
-    Time time = convertTime(directory->time);
-    if (isFolder)
+    uint32_t fatStartSector = RootDirStartSector + RootDirSector;
+    uint32_t fatSector = HALReadMultilSector(fatStartSector, FAT_SIZE, buff);
+    uint32_t fatEntryCount = fatSector * SECTOR_SIZE / 3 * 4;
+    uint32_t fatIndex = 0;
+    for (uint32_t i = 0; i < fatEntryCount; i += 4)
     {
-        printf("%d: %s%s\t\t\t", index++, directory->nameOfFile, directory->extension);
-        printf("%02d/%02d/%04d\t%02d:%02d:%02d\n", date.day, date.month, date.year, time.hour, time.minute, time.second);
-    }
-    else
-    {
-        printf("%d: %s.%s\t\t%d\t", index++, directory->nameOfFile, directory->extension, directory->fileSize);
-        printf("%02d/%02d/%04d\t%02d:%02d:%02d\n", date.day, date.month, date.year, time.hour, time.minute, time.second);
+        fat[fatIndex] = CONVERT_4_BYTES(&buff[i]) & 0x0FFFFFFF;
+        fatIndex++;
     }
 }
-void readFileName(uint8_t *buff, uint8_t *fileName)
+
+void readDirectory(Directory *directory, uint8_t *buff, uint32_t *cluster, uint32_t *attribute)
 {
-    for (uint8_t i = 0; i < 8; i++)
-    {
-        if (buff[i] == SPACE_CHARACTER)
-        {
-            buff[i] = '\0';
-        }
-        fileName[i] = buff[i];
-    }
-    fileName[8] = '\0';
-}
-void readExtension(uint8_t *buff, uint8_t *extension)
-{
-    for (uint8_t i = 0; i < 3; i++)
-    {
-        extension[i] = buff[8 + i];
-    }
-    extension[3] = '\0';
-}
-void convertEntryToDirectory(Directory *directory, uint8_t *buff, uint32_t index)
-{
-    readFileName(&buff[index], directory->nameOfFile);
-    readExtension(&buff[index], directory->extension);
-    directory->time = convertLittleToBig16((buff[index + ENTRY_TIME_OFFSET] << 8) | buff[index + ENTRY_TIME_OFFSET + 1]);
-    directory->date = convertLittleToBig16((buff[index + ENTRY_DATE_OFFSET] << 8) | buff[index + ENTRY_DATE_OFFSET + 1]);
-    directory->clusterNumber = convertLittleToBig16((buff[index + ENTRY_CLUSTER_OFFSET] << 8) | buff[index + ENTRY_CLUSTER_OFFSET + 1]);
-    directory->fileSize = convertLittleToBig32((buff[index + ENTRY_FILESIZE_OFFSET] << 24) | (buff[index + ENTRY_FILESIZE_OFFSET + 1] << 16) |
-                                               (buff[index + ENTRY_FILESIZE_OFFSET + 2] << 8) | buff[index + ENTRY_FILESIZE_OFFSET + 3]);
-}
-void readDirectory(Directory *directory, uint8_t *buff)
-{
-    uint32_t readMultiByte = HALReadMultilSector(RootDirStartSector, RootDirSector, buff, NULL);
-    uint32_t maxEntries = readMultiByte / SIZE_ENTRY;
+    uint32_t readMultiByte = HALReadMultilSector(RootDirStartSector, RootDirSector, buff);
+    uint32_t maxEntries = readMultiByte / SIZE_ENTRY; // 14
+    directory->clusterIndex = 0;
+    uint8_t index = 1;
     for (uint32_t j = 0; j < maxEntries; j++)
     {
-        uint32_t index = j * SIZE_ENTRY;
-        if (buff[index] != 0)
+        uint32_t entryIndex = j * SIZE_ENTRY;
+        if (buff[entryIndex] == 0)
         {
-            convertEntryToDirectory(directory, buff, index);
-            if (buff[index + 11] == 0x10) // folder
+            return;
+        }
+        else if (buff[entryIndex + 11] != 0x0F)
+        {
+            convertEntryToDirectory(directory, buff, entryIndex);
+            directory->clusterIndex++;
+            cluster[directory->clusterIndex] = directory->clusterNumber;
+            attribute[directory->clusterIndex] = buff[entryIndex + 11];
+            printDirectory(directory, index);
+            index++;
+        }
+    }
+}
+
+void readSubDirectory(Directory *directory, uint8_t *buff, uint32_t *fat, uint32_t clusterIndex)
+{
+    uint32_t dataStartSector = RootDirStartSector + RootDirSector;
+    uint32_t dataSector = TOTAL_SECTOR - dataStartSector;
+    uint32_t offsetData = DATA_START_SECTOR + clusterIndex - 2;
+    uint32_t readSector = HALReadSector(offsetData, buff);
+    uint32_t maxEntries = readSector * SECTOR_SIZE / SIZE_ENTRY;
+    uint32_t index = 1;
+    for (uint32_t j = 0; j < maxEntries; j++)
+    {
+        uint32_t entryIndex = j * SIZE_ENTRY;
+        if (buff[entryIndex] == 0)
+        {
+            return;
+        }
+        else if (buff[entryIndex + ENTRY_ATTRIBUTES_OFFSET] != 0x0F)
+        {
+            convertEntryToDirectory(&directory[index], buff, entryIndex);
+            directory[index].clusterIndex = clusterIndex;
+            printDirectory(&directory[index], index);
+            index++;
+        }
+        else if (buff[entryIndex] == 0xE5)
+        {
+            continue;
+        }
+        else if (buff[entryIndex + ENTRY_ATTRIBUTES_OFFSET] == ATTRIBUTE_DIRECTORY)
+        {
+            uint32_t subCluster = CONVERT_2_BYTES(&buff[entryIndex + ENTRY_CLUSTER_OFFSET]);
+            if (subCluster >= 0x0002 && subCluster <= 0x0FEF)
             {
-                printDirectory(directory, true);
+                readSubDirectory(directory, buff, fat, subCluster);
             }
-            else if (buff[index + 11] == 0) // file
+            else if (subCluster >= 0x0FF0)
             {
-                printDirectory(directory, false);
+                // Long File Name Entry, ignore
+            }
+            else if (subCluster == 0x0000 || subCluster >= 0x0FF7)
+            {
+                // End of Cluster Chain or Reserved Cluster, ignore
+            }
+            else
+            {
+                uint32_t nextCluster = fat[subCluster];
+                while (nextCluster >= 0x0002 && nextCluster <= 0x0FEF)
+                {
+                    readSubDirectory(directory, buff, fat, nextCluster);
+                    nextCluster = fat[nextCluster];
+                }
             }
         }
     }
 }
-void readData(Data * data, uint8_t *buff)
+
+uint32_t readData(Data *data, uint8_t *buff, uint32_t cluster)
 {
-    data->DataStartSector = RootDirStartSector + RootDirSector;   // 33
-    data->DataSector = TOTAL_SECTOR - data->DataStartSector; // 2847
-    uint32_t readMultiSector = HALReadMultilSector(33, 1, buff, NULL);
-    // for (int i = 0; i < readMultiSector; ++i)
-    // {
-    //     printf("%c", buff[i]);
-    // }
+    uint32_t dataStartSector = RootDirStartSector + RootDirSector;
+    uint32_t dataSector = TOTAL_SECTOR - dataStartSector;
+    uint32_t offsetData = DATA_START_SECTOR + cluster - 2;
+    uint32_t readSector = HALReadMultilSector(offsetData, 1, buff);
+    // Process the data here
+    return readSector;
 }
+
 int main()
 {
-    FAT fat;
+    FAT fat1;
     Boot boot;
-    Directory directory;
     Data data1;
-    uint8_t sector[512];
-    uint8_t buff[ROOT_SIZE]; // root
-    uint32_t cluster[2847];
-    uint8_t choiceFile = 1;
-    FILE *file = fopen("floppy.img", "rb");
-    if (file == NULL)
+    Directory directory[ROOT_SIZE / ENTRY_SIZE];
+    uint8_t buff[MAX_BYTE];
+    uint32_t fat[FAT_SIZE / 4];
+    uint32_t clusterIndex = 0;
+    int8_t choiceFile = 1;
+    readBootSector(&boot, buff);
+    readFAT(buff, fat);
+    printf("FOLDER và FILE trong thư mục gốc\n");
+    printf("ID TÊN\t\tLOẠI\t KÍCH THƯỚC\t\tNGÀY\t\tGIỜ\n");
+    readSubDirectory(directory, buff, fat, clusterIndex);
+    while (choiceFile != -1)
     {
-        printf("Cannot open file\n");
-        return -1;
+        printf("\nChọn file hoặc thư mục để mở: ");
+        scanf("%d", &choiceFile);
+        printf("\n");
+        if (choiceFile != 0 && choiceFile < clusterIndex)
+        {
+            if (directory[choiceFile].attribute != ATTRIBUTE_DIRECTORY)
+            {
+                uint32_t cluster = directory[choiceFile].clusterNumber;
+                while (cluster >= 0x0002 && cluster <= 0x0FEF)
+                {
+                    uint32_t read = readData(&data1, buff, cluster);
+                    for (int i = 0; i < read; ++i)
+                    {
+                        printf("%c", buff[i]);
+                    }
+                    cluster = fat[cluster];
+                }
+                printf("\n");
+            }
+        }
+        else if (directory[choiceFile].clusterNumber == 0)
+        {
+            clusterIndex++;
+            readSubDirectory(directory, buff, fat, clusterIndex);
+        }
+        else
+        {
+        }
     }
-    readBootSector(&boot, file, sector);
-    printf("FOLDER and FILES in root directory\n");
-    printf("ID NAME\t\t\tSIZE\tTIME\t\tDATE\n");
-    readDirectory(&directory, buff);
-    // while(choiceFile != 0)
-    // {
-    //     printf("Data: ");
-    // readData(&data1, sector, file);
-    // }
-    fclose(file);
     return 0;
 }

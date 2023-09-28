@@ -33,21 +33,13 @@ typedef struct
     uint8_t attribute;
     uint32_t fileSize;
     uint32_t clusterIndex;
-} Directory;
-
-typedef struct 
-{
     uint16_t year;
     uint8_t day;
     uint8_t month;
-}Date;
-
-typedef struct 
-{
     uint8_t hour;
     uint8_t minute;
     uint8_t second;
-}Time;
+} Directory;
 
 typedef struct 
 {
@@ -56,12 +48,21 @@ typedef struct
    uint32_t Cluster;
    uint32_t offSetData;
 }Data;
-
-
-void readDirectory(Directory *directory, FILE *file, uint8_t *buff, uint32_t *cluster,uint32_t * attribute);
-void printDirectory(Directory *directory, bool isFolder, uint8_t index);
-void readSubDirectory(Directory * directory, uint32_t *cluster);
-void readFAT(uint8_t *buff, FILE * file);
-void readData(Data *data, uint8_t *buff, FILE *file, uint32_t cluster);
+typedef struct BOOT_SECTER
+{
+    uint16_t bytePerSector;
+    uint16_t totalSector;
+    uint16_t sectorPerFAT;
+    uint16_t rootEntryCount;
+    uint8_t sectorsPerCluster;
+    uint8_t numberReservedSectors;
+    uint8_t FATTableNumber;
+} Boot;
+void readBootSector(Boot *boot, uint8_t *buff);
+void readRootDirectory(Directory *directory, uint8_t *buff, uint32_t *cluster, uint32_t *attribute);
+void printDirectory(Directory *directory,uint8_t index);
+void readSubDirectory(Directory *directory, uint8_t *buff, uint32_t *cluster, uint32_t *attribute);
+uint32_t readFAT(uint8_t *buff, uint32_t cluster);
+uint32_t readData(Data *data, uint8_t *buff,uint32_t cluster);
 
 #endif    /*  */
