@@ -15,8 +15,9 @@
 /*******************************************************************************
  * API
  ******************************************************************************/
-void readBootSector(Boot *boot, uint8_t *buff)
+void readBootSector(Boot *boot)
 {
+    uint8_t * buff =(uint8_t*)malloc(SECTOR_SIZE);
     HALReadSector(0, buff);
     if (buff[510] != 0x55 || buff[511] != 0xAA)
     {
@@ -31,8 +32,16 @@ void readBootSector(Boot *boot, uint8_t *buff)
         boot->rootEntryCount = CONVERT_2_BYTES(&buff[17]);
         boot->totalSector = CONVERT_2_BYTES(&buff[19]);
         boot->sectorPerFAT = buff[22];
-        
+
+        boot->FATStartSector = boot->numberReservedSectors;
+        boot->FAtSector = boot->FATTableNumber * boot->sectorPerFAT;
+        boot->RootDirStartSector = boot->FATStartSector + boot->FAtSector;
+        boot->RootDirSector = (32 * boot->rootEntryCount + boot->bytePerSector - 1) / boot->bytePerSector;
+        boot->DataStartSector = boot->RootDirStartSector + boot->RootDirSector;
+        boot->DataSector = boot->totalSector - boot->DataStartSector;
+        boot->countCluster = boot->DataSector / boot->bytePerSector;
     }
+    free(buff);
 }
 static Directory convertDateTime(uint16_t date, uint16_t time)
 {
@@ -84,9 +93,10 @@ void convertEntryToDirectory(Directory *directory, uint8_t *buff, uint32_t index
     directory->fileSize = CONVERT_4_BYTES(&buff[index + ENTRY_FILESIZE_OFFSET]);
 }
 
-void readRootDirectory(Directory *directory, uint8_t *buff, uint32_t *cluster, uint32_t *attribute)
-{   
-    uint32_t readMultiByte = HALReadMultilSector(RootDirStartSector,RootDirSector, buff);
+void readRootDirectory(Directory *directory, Boot boot, uint32_t *cluster, uint32_t *attribute)
+{
+    uint8_t *buff = (uint8_t *)malloc(boot.RootDirSector * boot.bytePerSector);
+    uint32_t readMultiByte = HALReadMultilSector(19, 14, buff);
     // uint32_t readMultiByte = HALReadMultilSector(38,1, buff);
     uint32_t maxEntries = readMultiByte / SIZE_ENTRY; // 14
     directory->clusterIndex = 0;
@@ -108,57 +118,80 @@ void readRootDirectory(Directory *directory, uint8_t *buff, uint32_t *cluster, u
             index++;
         }
     }
+    free(buff);
 }
-// void readSubDirectory(Directory *directory, uint8_t *buff, uint32_t cluster, uint32_t *attribute)
-// {
-//     uint32_t offsetData = 33 + cluster - 2; 
-//     uint32_t readMultiByte = HALReadSector(offsetData, buff);
-//     // uint32_t readMultiByte = HALReadMultilSector(38,1, buff);
-//     uint32_t maxEntries = readMultiByte / SIZE_ENTRY; // 14
-//     directory->clusterIndex = 0;
-//     uint8_t index = 1;
-//     for (uint32_t j = 0; j < maxEntries; j++)
-//     {
-//         uint32_t entryIndex = j * SIZE_ENTRY;
-//         if (buff[entryIndex] == 0)
-//         {
-//             return;
-//         }
-//         else if (buff[entryIndex + 11] != 0x0F)
-//         {
-//             convertEntryToDirectory(directory, buff, entryIndex);
-//             directory->clusterIndex++;
-//             cluster[directory->clusterIndex] = directory->clusterNumber;
-//             attribute[directory->clusterIndex] = buff[entryIndex + 11];
-//             printDirectory(directory, index);
-//             index++;
-//         }
-//     }
-// }
-
-uint32_t readFAT(uint8_t *buff, uint32_t cluster)
+void readSub(Directory *directory, Boot boot, uint32_t first, uint32_t *attribute, uint32_t *cluster)
 {
-    uint32_t byte = HALReadMultilSector(1, 9, buff);
-    uint32_t fatOffset = (33 + cluster - 2) * 512;
-    uint32_t result = 0;
-    if (cluster % 2 != 0)
+    uint8_t *buff = (uint8_t *)malloc(boot.bytePerSector);
+    uint32_t offsetCluster = boot.DataStartSector + first - 2;
+    uint32_t readMultiByte = HALReadSector(offsetCluster, buff);
+    uint32_t maxEntries = readMultiByte / SIZE_ENTRY;
+    directory->clusterIndex = 0;
+    uint8_t index = 0;
+    for (uint32_t j = 0; j < maxEntries; j++)
     {
-        result = (buff[fatOffset] >> 4) | ((uint16_t)buff[fatOffset + 1] << 4);
+        uint32_t entryIndex = j * SIZE_ENTRY;
+        if ((directory->nameOfFile[0] == 0x00) || (directory->nameOfFile[0] = 0xE5))
+        {
+            return;
+        }
+        else if ((directory->attribute) != 0x0F)
+        {
+            convertEntryToDirectory(directory, buff, entryIndex);
+            cluster[directory->clusterIndex] = (directory->clusterNumber);
+            attribute[directory->clusterIndex] = (buff[entryIndex + 11]);
+            directory->clusterIndex++;
+            printDirectory(directory, index);
+            index++;
+        }
+    }
+    free(buff);
+}
+
+static uint32_t findNextCluster(uint32_t fat_offset, uint32_t cluster)
+{
+    uint32_t index = (cluster * 3) / (2 * SECTOR_SIZE);
+    uint32_t entryOffset = (cluster * 3) % (2 * SECTOR_SIZE);
+    unsigned char *buff = (unsigned char *)malloc(SECTOR_SIZE);
+    if (buff == NULL)
+    {
+        printf("\ncan not malloc buffer");
+        return -1;
+    }
+    fat_offset = index + 1;
+    HALReadSector(fat_offset, buff);
+    uint8_t firstByte = buff[entryOffset];
+    uint8_t secondByte = buff[entryOffset + 1];
+    uint8_t lowByte, highByte;
+    if (cluster % 2 == 0)
+    {
+        lowByte = firstByte;
+        highByte = (secondByte & 0x0F);
     }
     else
     {
-        result = (buff[fatOffset]) | ((uint16_t)buff[fatOffset + 1] & 0x0F) << 8;
+        lowByte = (firstByte >> 4);
+        highByte = secondByte;
     }
-    return result;
+    uint32_t nextCluster = lowByte | (highByte << 8);
+    free(buff);
+    return nextCluster;
 }
-
-
-uint32_t readData(Data *data, uint8_t *buff, uint32_t cluster)
+void readData(Boot *boot, uint32_t cluster)
 {
-
-    uint32_t dataStartSector = RootDirStartSector + RootDirSector; // 33
-    uint32_t dataSector = TOTAL_SECTOR - dataStartSector;          // 2847
-    uint32_t offsetData = DATA_START_SECTOR + cluster - 2;         // 33
-    uint32_t readSector = HALReadSector(offsetData, buff);
-    return readSector;
+    uint8_t *buff = (uint8_t *)malloc(SECTOR_SIZE);
+    readBootSector(boot);
+    do
+    {
+        uint32_t offsetData = boot->DataStartSector + cluster - 2;
+        uint32_t readSector = HALReadSector(offsetData, buff);
+        for (int i = 0; i < readSector; i++)
+        {
+            printf("%c", buff[i]);
+        }
+        printf("\n");
+        cluster = findNextCluster(offsetData, cluster);
+    } while (cluster <= 0x07);
+    free(buff);
 }
+

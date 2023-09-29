@@ -1,1 +1,0 @@
-    // freeDirectory(directory, directory[0].clusterIndex);

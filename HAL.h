@@ -44,4 +44,6 @@ typedef enum
 
 uint32_t HALReadSector(uint32_t index, uint8_t *buff);
 uint32_t HALReadMultilSector(uint32_t index, uint32_t num, uint8_t *buff);
+uint32_t HALReadMultiByte(uint32_t index, uint32_t num, uint8_t *buff);
+
 #endif 
